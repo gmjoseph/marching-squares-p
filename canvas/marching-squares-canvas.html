@@ -1,0 +1,524 @@
+<html>
+    <head>
+        <title>Marching Squares - Canvas</title>
+        <style>
+            body {
+                background-color: black;
+                margin: 0;
+                padding: 0;
+            }
+            #main {
+                display: flex;
+                height: 100%;
+                justify-content: center;
+                align-items: center;
+            }
+            canvas {
+                max-height: 100%;
+            }
+        </style>
+    </head>
+    <body>
+        <section id="main">
+            <canvas id="canvas" height="1024" width="1024"></canvas>
+        </section>
+        <label for="set-marching-squares-size">Marching Square Size</label>
+        <input type="number" id="set-marching-squares-size" name="set-marching-squares-size" min="1"> 
+        <button id="toggle-interpolate">Toggle Interpolate</button>
+        <button id="toggle-outline">Toggle Outline</button>
+        <button id="toggle-circles">Toggle Circles</button>
+        <button id="toggle-marching-squares-debug">Toggle Marching Squares Debug</button>
+        <button id="toggle-marching-squares-text-debug">Toggle Marching Squares Text Debug</button>
+        <button id="toggle-marching-squares-falloff-debug">Toggle Marching Squares Falloff Debug</button>
+    </body>
+    <script>
+
+    class Metaballs {
+        // Circle data:
+        // * Centres
+        // * Radiuses
+        constructor({ data, bounds }) {
+            this.bounds = bounds;
+            this.data = data;
+        }
+
+        // Is the point inside any of the circles
+        containsPoint = (x, y) => {
+            // Take the contribution from all metaballs when checking radius.
+            // This lets us combine the circles in a smooth way.
+            const total = this.totalAtPoint(x, y);
+            return total >= 1;
+        }
+
+        totalAtPoint = (x, y) => {
+            let total = 0;
+            for (let i = 0; i < data.length; i++) {
+                // See: http://jamie-wong.com/2014/08/19/metaballs-and-marching-squares/
+                // "The Math"
+                // Not doing the better code patterns for performance sake.
+                const circle = data[i];
+                const dx = x - circle.c[0];
+                const dy = y - circle.c[1];
+                const d = (circle.r * circle.r) / ((dx * dx) + (dy * dy));
+                total += d;
+            }
+            return total;
+        }
+
+        update() {
+            const { start, end } = this.bounds;
+            const [left, top] = start;
+            const [right, bottom] = end;
+            const ninety = Math.PI/2;
+
+            this.data.forEach(d => {    
+                const testBottom =  d.r >= Math.sqrt((d.c[1] - bottom) ** 2);
+                const testTop = d.r >= Math.sqrt((d.c[1] - top) ** 2);
+                const testLeft = d.r >= Math.sqrt((d.c[0] - left) ** 2);
+                const testRight = d.r >= Math.sqrt((d.c[0] - right) ** 2);
+                if (testBottom || testTop) {
+                    d.direction[1] = -d.direction[1];
+                }
+                if (testLeft || testRight) {
+                    d.direction[0] = -d.direction[0];
+                }
+                d.c[0] += d.direction[0] * 2;
+                d.c[1] += d.direction[1] * 2;
+            });
+        }
+    }
+
+    class Square {
+        constructor({ tl, tr, br, bl, x, y, size }) {
+            this.tl = tl;
+            this.tr = tr;
+            this.br = br;
+            this.bl = bl;
+            this.x = x;
+            this.y = y;
+            this.size = size;
+            this.centre = [x + size * 0.5, y + size * 0.5];
+
+            const tm = [x + size * 0.5, y];
+            const bm = [x + size * 0.5, y + size];
+            const lm = [x, y + size * 0.5];
+            const rm = [x + size, y + size * 0.5];
+
+            // Each of these corresponds to 0000 -> 1111 possible corner inclusion
+            // values (see MAP_MASK above).
+            // See: http://jamie-wong.com/images/14-08-11/marching-squares-mapping.png
+            this.lineFunctions = [
+                [],
+                [[lm, bm]],
+                [[bm, rm]],
+                [[lm, rm]],
+                [[tm, rm]],
+                [[lm, tm], [bm, rm]], // Careful, ambiguous case. Assume always inside.
+                [[tm, bm]],
+                [[lm, tm]],
+                [[lm, tm]], // Dupe of 0x7
+                [[tm, bm]], // Dupe of 0x6
+                [[lm, bm], [tm, rm]], // Careful, ambiguous case. Assume always inside.
+                [[tm, rm]], // Dupe of 0x4
+                [[lm, rm]], // Dupe of 0x3
+                [[bm, rm]], // Dupe of 0x2
+                [[lm, bm]], // Dupe of 0x1
+                [], // Dupe of 0x0
+            ];
+
+            // To interpolate something along top edge
+            const ti = (metaballHitTest) => {
+                const [Ax, Ay] = tl;
+                const [Bx, By] = tr;
+                const hitAxAy = metaballHitTest(Ax, Ay);
+                const hitBxBy = metaballHitTest(Bx, By);
+                const numerator = (1 - hitAxAy);
+                const denominator = hitBxBy - hitAxAy;
+                const Px = Ax + (Bx - Ax) * (numerator / denominator)
+                const Py = Ay;
+                return [Px, Py];
+            };
+
+            // To interpolate something along bottom edge
+            const bi = (metaballHitTest) => {
+                const [Cx, Cy] = bl;
+                const [Dx, Dy] = br;
+                const hitCxCy = metaballHitTest(Cx, Cy);
+                const hitDxDy = metaballHitTest(Dx, Dy);
+                const numerator = (1 - hitCxCy);
+                const denominator = hitDxDy - hitCxCy;
+                const Px = Cx + (Dx - Cx) * (numerator / denominator)
+                const Py = Cy;
+                return [Px, Py];
+            };
+
+            // To interpolate something along right edge
+            const ri = (metaballHitTest) => {
+                const [Bx, By] = tr;
+                const [Dx, Dy] = br;
+                const hitBxBy = metaballHitTest(Bx, By);
+                const hitDxDy = metaballHitTest(Dx, Dy);
+                const numerator = (1 - hitBxBy);
+                const denominator = hitDxDy - hitBxBy;
+                const Qx = Bx;
+                const Qy = By + (Dy - By) * (numerator / denominator)
+                return [Qx, Qy];
+            };
+
+            // To interpolate something along left edge
+            const li = (metaballHitTest) => {
+                const [Ax, Ay] = tl;
+                const [Cx, Cy] = bl;
+                const hitAxAy = metaballHitTest(Ax, Ay);
+                const hitCxCy = metaballHitTest(Cx, Cy);
+                const numerator = (1 - hitAxAy);
+                const denominator = hitCxCy - hitAxAy;
+                const Qx = Ax;
+                const Qy = Ay + (Cy - Ay) * (numerator / denominator)
+                return [Qx, Qy];
+            };
+
+            this.interpolationFunctions = [
+                [],
+                [[li, bi]],
+                [[bi, ri]],
+                [[li, ri]],
+                [[ti, ri]],
+                [[li, ti], [bi, ri]], // Careful, ambiguous case. Assume always inside.
+                [[ti, bi]],
+                [[li, ti]],
+                [[li, ti]], // Dupe of 0x7
+                [[ti, bi]], // Dupe of 0x6
+                [[li, bi], [ti, ri]], // Careful, ambiguous case. Assume always inside.
+                [[ti, ri]], // Dupe of 0x4
+                [[li, ri]], // Dupe of 0x3
+                [[bi, ri]], // Dupe of 0x2
+                [[li, bi]], // Dupe of 0x1
+                [], // Dupe of 0x0
+            ];
+        }
+    }
+
+    class MarchingSquares {
+        // Models the marching square data. Because we're doing metaballs we need to generate
+        // that field on the fly, which the marching squares will then sample using the
+        // squares' corners (typical for the algorithm...)
+        // Takes care of:
+        // * making the squares
+        // * 'marching' them
+        // * linear interpolation
+        // * querying whether the square corners are inside or outside the shapes
+        // Size of the square. The smaller it is the more accurate the image is, but the longer
+        // it will take to march since there are more.
+        constructor({ dimensions, squareSize = 10, interpolate = true }) {
+            this.interpolate = interpolate;
+            this.dimensions = dimensions;
+            this.squareSize = squareSize;
+            this.squares = [];
+            this.index = [];
+            this.edges = [];
+            this.MAP_MASK = {
+                bl: 0x1,
+                br: 0x2,
+                tr: 0x4,
+                tl: 0x8,
+            };
+            this.cornerKeys = Object.keys(this.MAP_MASK);
+            this.generateSquares();
+        }
+
+        generateSquares() {
+            this.squares = [];
+            const { dimensions, squareSize: size } = this;
+            const { width, height } = dimensions;
+            // Column by column, row by row.
+            for (let x = 0; x < width; x += size) {
+                for (let y = 0; y < height; y += size) {
+                    const tl = [x, y];
+                    const tr = [x + size, y];
+                    const br = [x + size, y + size];
+                    const bl = [x, y + size];
+                    const square = new Square({ tl, tr, br, bl, x, y, size });
+                    this.squares.push(square);
+                }
+            }
+        }
+
+        march(metaballs) {
+            // How we can include or exclude a corner in the bitmask.
+            // See this lookup table:
+            // http://jamie-wong.com/images/14-08-11/marching-squares-mapping.png
+            const { cornerKeys, MAP_MASK } = this;
+            this.index = this.squares.map(square => {
+                let bitsIndex = 0;
+                // Sample each corner point from the squares. Since squares share corner points,
+                // there will no doubt be some duplication.
+                // We're going to produce an index from these which is binary-encoded to show
+                // which corners of the square are in the metaballs and which aren't.                
+                cornerKeys.forEach(k => {
+                    const [cx, cy] = square[k];
+                    const mask = MAP_MASK[k];
+                    if (metaballs.containsPoint(cx, cy)) {
+                        bitsIndex |= mask;
+                    }
+                });
+                return bitsIndex;
+            });
+
+            if (this.interpolate) {
+                // Now that we know which corners are involved, we can get the right
+                // interpolation functions and compute the lines/points themselves.
+                this.edges = [];
+                this.index.forEach((bitsIndex, i) => {
+                    // Get corresponding square for its interpolation.
+                    const square = this.squares[i];
+                    const perLineFunctions = square.interpolationFunctions[bitsIndex];
+                    const lines = perLineFunctions.forEach(lineFuncs => {
+                        // Points for this edge:
+                        const p0 = lineFuncs[0](metaballs.totalAtPoint);
+                        const p1 = lineFuncs[1](metaballs.totalAtPoint);
+                        this.edges.push([p0, p1]);
+                    });
+                });
+            }
+        }
+    }
+
+    class Viz {
+        constructor({ metaballs, marchingSquares }) {
+            this.canvas = document.getElementById('canvas');
+            this.ctx = canvas.getContext('2d');
+            this.metaballs = metaballs;
+            this.marchingSquares = marchingSquares;
+            
+            // Controls for viz
+            this.setupControls();
+            this.toggleOutline = true;
+            this.toggleCircles = true;
+            this.toggleMarchingSquaresDebug = false;
+            this.toggleMarchingSquaresTextDebug = false;
+            this.toggleMarchingSquaresFalloffDebug = false;
+        }
+
+        setupControls() {
+            const setMarchingSquaresSize = document.getElementById('set-marching-squares-size');
+            setMarchingSquaresSize.value = this.marchingSquares.squareSize;
+
+            const handler = (event) => {
+                this.marchingSquares.squareSize = parseFloat((event.target.value));
+                // We have to regenerate them, since we only generate on construction.
+                this.marchingSquares.generateSquares();
+            };
+            setMarchingSquaresSize.onchange = handler;
+            setMarchingSquaresSize.oninput = handler;
+
+            const toggleInterpolate = document.getElementById('toggle-interpolate');
+            toggleInterpolate.onclick = () => {
+                this.marchingSquares.interpolate = !this.marchingSquares.interpolate;
+            }
+
+            const toggleOutline = document.getElementById('toggle-outline');
+            toggleOutline.onclick = () => {
+                this.toggleOutline = !this.toggleOutline;
+            }
+
+            const toggleCircles = document.getElementById('toggle-circles');
+            toggleCircles.onclick = () => {
+                this.toggleCircles = !this.toggleCircles;
+            }
+
+            const toggleMarchingSquaresDebug = document.getElementById('toggle-marching-squares-debug');
+            toggleMarchingSquaresDebug.onclick = () => {
+                this.toggleMarchingSquaresDebug = !this.toggleMarchingSquaresDebug;
+            }
+
+            const toggleMarchingSquaresTextDebug = document.getElementById('toggle-marching-squares-text-debug');
+            toggleMarchingSquaresTextDebug.onclick = () => {
+                this.toggleMarchingSquaresTextDebug = !this.toggleMarchingSquaresTextDebug;
+            }
+
+            const toggleMarchingSquaresFalloffDebug = document.getElementById('toggle-marching-squares-falloff-debug');
+            toggleMarchingSquaresFalloffDebug.onclick = () => {
+                this.toggleMarchingSquaresFalloffDebug = !this.toggleMarchingSquaresFalloffDebug;
+            }
+        }
+
+        debugDrawMetaballs() {
+            if (!this.toggleCircles) {
+                return;
+            }
+            const { ctx } = this;
+            const { data } = this.metaballs;
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 0.5;
+            data.forEach(d => {
+                const [cx, cy] = d.c;
+                const { r } = d;
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.stroke();
+            });
+        }
+
+        debugDrawMarchingSquares() {
+            if (!this.toggleMarchingSquaresDebug &&
+                !this.toggleMarchingSquaresTextDebug &&
+                !this.toggleMarchingSquaresFalloffDebug) {
+                return;
+            }
+            const { ctx } = this;
+            const { squares } = this.marchingSquares;
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 0.5;
+            ctx.font = '8px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            // Essentially marching the squares. But drawing text + total value for debug purposes.
+            squares.forEach(square => {
+                const [cx, cy] = square.centre;
+                const total = this.metaballs.totalAtPoint(cx, cy);
+                const containsPoint = total >= 1;
+
+                if (this.toggleMarchingSquaresDebug) {
+                    if (containsPoint) {
+                        ctx.fillStyle = 'red';
+                        if (this.toggleMarchingSquaresDebug) {
+                            ctx.fillRect(square.x, square.y, square.size, square.size);
+                        }
+                    }
+                    // Outline the rect, fill in some stats
+                    ctx.strokeRect(square.x, square.y, square.size, square.size);
+                }
+                
+                if (this.toggleMarchingSquaresTextDebug || this.toggleMarchingSquaresFalloffDebug) {
+                    if (!containsPoint) {
+                        if (this.toggleMarchingSquaresFalloffDebug) {
+                            ctx.fillStyle = `rgb(${255 * total}, 0, 0)`
+                            ctx.fillRect(square.x, square.y, square.size, square.size);
+                        }
+                    }
+                    if (this.toggleMarchingSquaresTextDebug) {
+                        ctx.fillStyle = 'white';
+                        ctx.fillText(`${total}`.substring(0, 3), cx, cy);
+                    }
+                }
+            });
+        }
+
+        drawMarchingSquareEdges() {
+            // More refined, actually uses the index from 'march' to draw the contour
+            // edges instead of just blindly filling the square.
+            if (!this.toggleOutline) {
+                return;
+            }
+            const { ctx } = this;
+            const { squares, interpolate, size } = this.marchingSquares;
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'blue';
+            ctx.lineWidth = 3;
+            ctx.font = `${size}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            if (!interpolate) {
+                // Without interpolation
+                this.marchingSquares.index.forEach((value, i) => {
+                    // Get the associated square, since we need a reference point for
+                    // drawing the shape.                
+                    const square = squares[i];
+                    const lineFunction = square.lineFunctions[value];
+                    lineFunction.forEach(line => {
+                        const [p0, p1] = line;
+                        const [x0, y0] = p0;
+                        const [x1, y1] = p1;
+                        ctx.beginPath();
+                        ctx.moveTo(x0, y0);
+                        ctx.lineTo(x1, y1);
+                        ctx.stroke();
+                    });
+                    // Can debug what the index contained as far as 0x0 -> 0xf
+                    // const [cx, cy] = square.centre;
+                    // ctx.fillText(value, cx, cy);
+                });
+            } else {
+                // With interpolation
+                this.marchingSquares.edges.forEach((edge, i) => {
+                    const [p0, p1] = edge;
+                    const [x0, y0] = p0;
+                    const [x1, y1] = p1;
+                    ctx.beginPath();
+                    ctx.moveTo(x0, y0);
+                    ctx.lineTo(x1, y1);
+                    ctx.stroke();
+                    // Can debug what the index contained as far as 0x0 -> 0xf
+                    // const [cx, cy] = square.centre;
+                    // ctx.fillText(value, cx, cy);
+                });
+            }
+        }
+
+        update() {
+            const { canvas, ctx } = this;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            this.debugDrawMarchingSquares();
+            this.debugDrawMetaballs();
+            this.drawMarchingSquareEdges();
+        }
+    }
+
+    const { width, height } = document.getElementById('canvas');
+
+    // Add a random direction for now between [-1, 1].
+    const randomDirection = () => [
+        -1 + 2 * Math.random(),
+        -1 + 2 * Math.random()
+    ];
+
+    // For motion, try to make sure none of these go past the bounds.
+    // Otherwise the object will get stuck there given the current collision testing.
+    const data = [
+        { r: 73, c: [width * 0.5, height * 0.5], direction: randomDirection() },
+        { r: 23, c: [width * 0.1, height * 0.2], direction: randomDirection() },
+        { r: 82, c: [width * 0.85, height * 0.9], direction: randomDirection() },
+        { r: 30, c: [width * 0.4, height * 0.1], direction: randomDirection() },
+        { r: 50, c: [width * 0.6, height * 0.7], direction: randomDirection() },
+        { r: 69, c: [width * 0.1, height * 0.8], direction: randomDirection() },
+        { r: 37, c: [width * 0.2, height * 0.4], direction: randomDirection() },
+        { r: 73, c: [width * 0.9, height * 0.1], direction: randomDirection() },
+        { r: 83, c: [width * 0.3, height * 0.7], direction: randomDirection() },
+        { r: 60, c: [width * 0.4, height * 0.9], direction: randomDirection() },
+        { r: 120, c: [width * 0.5, height * 0.7], direction: randomDirection() },
+    ];
+
+    const bounds = {
+        start: [0, 0],
+        end: [canvas.width, canvas.height],
+    };
+    const metaballs = new Metaballs({ data, bounds });
+    const marchingSquares = new MarchingSquares({
+        dimensions: { width, height },
+        // Anything < 5 seems to be too slow for real time.
+        // At 2 it really slows down, but at that point we're basically almost doing per-pixel.
+        squareSize: 10,
+        // Don't use edge LUT, instead compute edges on the fly with linear interpolation.
+        interpolate: true,
+    });
+    marchingSquares.march(metaballs);
+    const viz = new Viz({ metaballs, marchingSquares });
+
+    const update = (_timestamp) => {
+        metaballs.update();
+        // If the metaball positions have updated, we need to march again to find
+        // the intersections.
+        marchingSquares.march(metaballs);
+        // After marching we can then update the visualization.
+        viz.update();
+        // Rinse and repeat.
+        window.requestAnimationFrame(update);
+    }
+
+    window.requestAnimationFrame(update);
+
+    </script>
+</html>

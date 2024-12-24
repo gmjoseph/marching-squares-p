@@ -1,0 +1,650 @@
+<html>
+    <head>
+        <title>Marching Squares - WebGL</title>
+        <style>
+            body {
+                background-color: black;
+                margin: 0;
+                padding: 0;
+            }
+            #main {
+                display: flex;
+                height: 100%;
+                justify-content: center;
+                align-items: center;
+            }
+            canvas {
+                max-height: 100%;
+            }
+        </style>
+    </head>
+    <body>
+        <section id="main">
+            <canvas id="canvas" height="1024" width="1024"></canvas>
+        </section>
+        <label for="set-marching-squares-size">Marching Square Size</label>
+        <input type="number" id="set-marching-squares-size" name="set-marching-squares-size" min="0.001" max="0.1" step="0.001"> 
+        <button id="toggle-interpolate">Toggle Interpolate</button>
+        <button id="toggle-outline">Toggle Outline</button>
+        <button id="toggle-circles">Toggle Circles</button>
+        <button id="toggle-marching-squares-debug">Toggle Marching Squares Debug</button>
+        <button id="toggle-marching-squares-falloff-debug">Toggle Marching Squares Falloff Debug</button>
+    </body>
+    <script>
+
+    const SHADER_NAME = 'shader';
+
+    class Metaballs {
+        // Circle data:
+        // * Centres
+        // * Radiuses
+        constructor({ data, bounds }) {
+            this.bounds = bounds;
+            this.data = data;
+        }
+
+        totalAtPoint = (x, y) => {
+            let total = 0;
+            for (let i = 0; i < data.length; i++) {
+                // See: http://jamie-wong.com/2014/08/19/metaballs-and-marching-squares/
+                // "The Math"
+                // Not doing the better code patterns for performance sake.
+                const circle = data[i];
+                const dx = x - circle.c[0];
+                const dy = y - circle.c[1];
+                const d = (circle.r * circle.r) / ((dx * dx) + (dy * dy));
+                total += d;
+            }
+            return total;
+        }
+
+        update() {
+            const { start, end } = this.bounds;
+            const [left, top] = start;
+            const [right, bottom] = end;
+
+            this.data.forEach(d => {    
+                const testBottom =  d.r >= Math.sqrt((d.c[1] - bottom) ** 2);
+                const testTop = d.r >= Math.sqrt((d.c[1] - top) ** 2);
+                const testLeft = d.r >= Math.sqrt((d.c[0] - left) ** 2);
+                const testRight = d.r >= Math.sqrt((d.c[0] - right) ** 2);
+                if (testBottom || testTop) {
+                    d.direction[1] = -d.direction[1];
+                }
+                if (testLeft || testRight) {
+                    d.direction[0] = -d.direction[0];
+                }
+                d.c[0] += d.direction[0] / 1000;
+                d.c[1] += d.direction[1] / 1000;
+            });
+        }
+    }
+
+    // class Square {
+    //     constructor({ tl, tr, br, bl, x, y, size }) {
+    //         this.tl = tl;
+    //         this.tr = tr;
+    //         this.br = br;
+    //         this.bl = bl;
+
+    //         // To interpolate something along top edge
+    //         const ti = (metaballHitTest) => {
+    //             const [Ax, Ay] = tl;
+    //             const [Bx, By] = tr;
+    //             const hitAxAy = metaballHitTest(Ax, Ay);
+    //             const hitBxBy = metaballHitTest(Bx, By);
+    //             const numerator = (1 - hitAxAy);
+    //             const denominator = hitBxBy - hitAxAy;
+    //             const Px = Ax + (Bx - Ax) * (numerator / denominator)
+    //             const Py = Ay;
+    //             return [Px, Py];
+    //         };
+
+    //         // To interpolate something along bottom edge
+    //         const bi = (metaballHitTest) => {
+    //             const [Cx, Cy] = bl;
+    //             const [Dx, Dy] = br;
+    //             const hitCxCy = metaballHitTest(Cx, Cy);
+    //             const hitDxDy = metaballHitTest(Dx, Dy);
+    //             const numerator = (1 - hitCxCy);
+    //             const denominator = hitDxDy - hitCxCy;
+    //             const Px = Cx + (Dx - Cx) * (numerator / denominator)
+    //             const Py = Cy;
+    //             return [Px, Py];
+    //         };
+
+    //         // To interpolate something along right edge
+    //         const ri = (metaballHitTest) => {
+    //             const [Bx, By] = tr;
+    //             const [Dx, Dy] = br;
+    //             const hitBxBy = metaballHitTest(Bx, By);
+    //             const hitDxDy = metaballHitTest(Dx, Dy);
+    //             const numerator = (1 - hitBxBy);
+    //             const denominator = hitDxDy - hitBxBy;
+    //             const Qx = Bx;
+    //             const Qy = By + (Dy - By) * (numerator / denominator)
+    //             return [Qx, Qy];
+    //         };
+
+    //         // To interpolate something along left edge
+    //         const li = (metaballHitTest) => {
+    //             const [Ax, Ay] = tl;
+    //             const [Cx, Cy] = bl;
+    //             const hitAxAy = metaballHitTest(Ax, Ay);
+    //             const hitCxCy = metaballHitTest(Cx, Cy);
+    //             const numerator = (1 - hitAxAy);
+    //             const denominator = hitCxCy - hitAxAy;
+    //             const Qx = Ax;
+    //             const Qy = Ay + (Cy - Ay) * (numerator / denominator)
+    //             return [Qx, Qy];
+    //         };
+
+    //         this.interpolationFunctions = [
+    //             [],
+    //             [[li, bi]],
+    //             [[bi, ri]],
+    //             [[li, ri]],
+    //             [[ti, ri]],
+    //             [[li, ti], [bi, ri]], // Careful, ambiguous case. Assume always inside.
+    //             [[ti, bi]],
+    //             [[li, ti]],
+    //             [[li, ti]], // Dupe of 0x7
+    //             [[ti, bi]], // Dupe of 0x6
+    //             [[li, bi], [ti, ri]], // Careful, ambiguous case. Assume always inside.
+    //             [[ti, ri]], // Dupe of 0x4
+    //             [[li, ri]], // Dupe of 0x3
+    //             [[bi, ri]], // Dupe of 0x2
+    //             [[li, bi]], // Dupe of 0x1
+    //             [], // Dupe of 0x0
+    //         ];
+    //     }
+    // }
+    //     march(metaballs) {
+    //         if (this.interpolate) {
+    //             // Now that we know which corners are involved, we can get the right
+    //             // interpolation functions and compute the lines/points themselves.
+    //             this.edges = [];
+    //             this.index.forEach((bitsIndex, i) => {
+    //                 // Get corresponding square for its interpolation.
+    //                 const square = this.squares[i];
+    //                 const perLineFunctions = square.interpolationFunctions[bitsIndex];
+    //                 const lines = perLineFunctions.forEach(lineFuncs => {
+    //                     // Points for this edge:
+    //                     const p0 = lineFuncs[0](metaballs.totalAtPoint);
+    //                     const p1 = lineFuncs[1](metaballs.totalAtPoint);
+    //                     this.edges.push([p0, p1]);
+    //                 });
+    //             });
+    //         }
+    //     }
+    // }
+
+    class Shader {
+        constructor(gl, vertCode, fragCode) {
+            this.program = null;
+            this.setupShader(gl, vertCode, fragCode);
+        }
+
+        setupShader(gl, vertCode, fragCode) {
+            const log = (shader) => {
+                const compiled = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+                if (!compiled) {
+                    console.log('Shader compiled failed: ' + compiled);
+                
+                    const compilationLog = gl.getShaderInfoLog(shader);
+                    console.log('Shader compiler log: ' + compilationLog);
+                }
+            };
+
+            const vertShader = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(vertShader, vertCode);
+            gl.compileShader(vertShader);
+            log(vertShader);
+            
+        
+            const fragShader = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(fragShader, fragCode); 
+            gl.compileShader(fragShader);
+            log(fragShader);
+            
+            const shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertShader);
+            gl.attachShader(shaderProgram, fragShader);
+            gl.linkProgram(shaderProgram);
+
+            this.program = shaderProgram
+        }
+
+        cacheUniformLocations(gl, uniformNames) {
+            uniformNames.forEach(name => {
+                const key = `${name}Location`;
+                this[key] = gl.getUniformLocation(this.program, name);
+            });
+        }
+
+        cacheAttributeLocations(gl, attributeNames, enable = false) {
+            attributeNames.forEach(name => {
+                const key = `${name}Locaton`;
+                const location = gl.getAttribLocation(this.program, name);
+                this[key] = location;
+                if (enable) {
+                    gl.enableVertexAttribArray(location);
+                }
+            })
+        }
+    }
+
+    class Viz {
+        constructor({ metaballs }) {
+            this.canvas = document.getElementById('canvas');
+            this.ctx = this.canvas.getContext('webgl2', {
+                antialias: true,
+                premultipliedAlpha: false,
+            });
+            this.metaballs = metaballs;
+            // The marching is going to be done in GLSL.
+
+            const tl = [-1, -1];
+            const bl = [-1, 1];
+            const tr = [1, -1];
+            const br = [1, 1];
+
+            this.state = {
+                // Coords
+                rawBuffer: new Float32Array([
+                    ...tl,
+                    ...bl,
+                    ...tr,
+                    ...br,
+                ]),
+                buffer: null,
+            };
+            this.setupGL();         
+
+            // Uniforms
+            // Default square size, can be adjusted with controls.
+            this.squareSize = 0.001;
+            this.toggleInterpolate = true;
+            this.toggleOutline = true;
+            this.toggleCircles = true;
+            this.toggleMarchingSquaresDebug = true;
+            this.toggleMarchingSquaresFalloffDebug = true;
+
+            // Controls for viz
+            this.setupControls();
+        }
+
+        setupGL() {
+            const { ctx: gl } = this;
+
+            gl.enable(gl.BLEND);
+            gl.clearColor(0.0, 0.0, 0.0, 0.0);
+            gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+
+            this.setupShaders();
+            this.setupBuffer();
+        }
+
+        setupShaders() {
+            const { ctx: gl } = this;
+
+            const uniforms = [
+                'u_square_size',
+                'u_centres',
+                'u_radiuses',
+                'u_toggle_interpolate',
+                'u_toggle_outline',
+                'u_toggle_circles',
+                'u_toggle_debug',
+                'u_toggle_falloff_debug',
+            ];
+
+            const attributes = [
+                'position',
+            ];
+
+            const vertCode =
+                '#version 300 es\n' +
+                'precision mediump float;' +
+                'in vec2 position;' +
+                'out vec2 v_position;' +
+
+                'void main(void) {' +
+                    'v_position = position;' +
+                    'gl_Position = vec4(position, 0.0, 1.0);' +
+                '}';
+
+            const fragCode =
+                '#version 300 es\n' +
+                'precision mediump float;' +
+                'in vec2 v_position;' +
+                'out vec4 FragColor;' +
+
+                'uniform float u_square_size;' +
+                `uniform vec2 u_centres[${this.metaballs.data.length}];` +
+                `uniform float u_radiuses[${this.metaballs.data.length}];` +
+                'uniform bool u_toggle_interpolate;' +
+                'uniform bool u_toggle_outline;' +
+                'uniform bool u_toggle_circles;' +
+                'uniform bool u_toggle_debug;' +
+                'uniform bool u_toggle_falloff_debug;' +
+
+                'float total_at_point(vec2 point) {' +
+                    'float total = 0.;' +
+                    'for (int i = 0; i < u_radiuses.length(); i++) {' +
+                        'vec2 delta = point - u_centres[i];' +
+                        // Going to have to sum this up across multiply circles so the above should loop.
+                        'float d = pow(u_radiuses[i], 2.) / (pow(delta.x, 2.) + pow(delta.y, 2.));' +
+                        'total += d;' +
+                    '}' +
+                    'return total;' +
+                '}' +
+
+
+                'float sdSegment( in vec2 p, in vec2 a, in vec2 b )' +
+                '{' +
+                '    vec2 pa = p-a, ba = b-a;' +
+                '    float h = clamp( dot(pa,ba)/dot(ba,ba), 0.0, 1.0 );' +
+                '    return 1. - length( pa - ba*h );' +
+                '}' +
+
+                // Non-interpolated version of generating the contour.
+                'float lineFunction(vec2 point, vec2 tl, int bitMask) {' +
+                    // Now figure out the edge midpoints so we can make a linear function to see
+                    // if we're on the edge between them or not.
+                    'float size = u_square_size;' +
+                    'float x = tl.x;' +
+                    'float y = tl.y;' +
+                    'vec2 tm = vec2(x + size * 0.5, y);' +
+                    'vec2 bm = vec2(x + size * 0.5, y + size);' +
+                    'vec2 lm = vec2(x, y + size * 0.5);' +
+                    'vec2 rm = vec2(x + size, y + size * 0.5);' +
+                    'float value = 0.;' +
+                    // Each of these corresponds to 0000 -> 1111 possible corner inclusion
+                    // values (see MAP_MASK above).
+                    // See: http://jamie-wong.com/images/14-08-11/marching-squares-mapping.png
+                    'switch (bitMask) {' +
+                        'case 0:' +
+                        'case 15: value = 0.; break;' +
+                        'case 1:' +
+                        'case 14: value = sdSegment(point, lm, bm); break;' +
+                        'case 2:' +
+                        'case 13: value = sdSegment(point, bm, rm); break;' +
+                        'case 3:' +
+                        'case 12: value = sdSegment(point, lm, rm); break;' +
+                        'case 4:' +
+                        'case 11: value = sdSegment(point, tm, rm); break;' +
+                        'case 6:' +
+                        'case 9: value = sdSegment(point, tm, bm); break;' +
+                        'case 7:' +
+                        'case 8: value = sdSegment(point, lm, tm); break;' +
+                        // Careful, ambiguous case. Assume always inside.
+                        // FIXME this and case 10 are wrong, need to try both lines.
+                        'case 5: {' +
+                            'value = sdSegment(point, lm, tm);' +
+                            'if (value != 1.) {' +
+                                'value = sdSegment(point, bm, rm);' +
+                            '}' +
+                            'break;' +
+                        '}' +
+                        // Careful, ambiguous case. Assume always inside.
+                        // FIXME this and case a are wrong, need to try both lines.
+                        'case 10: {' +
+                            'value = sdSegment(point, lm, bm);' +
+                            'if (value != 1.) {' +
+                                'value = sdSegment(point, tm, rm);' +
+                            '}' +
+                            'break;' +
+                        '}' +
+                        
+                    '}' +
+                    // To debug bitmasks.
+                    // 'return float(bitMask) / float(0xf);' +
+                    'return value;' +
+                '}' +
+
+                // Which square is it for a point,
+                // 1. then call total_at_point for each corner
+                // 2. then see if the point is in or out the shape
+                // 3. then produce the line(s) for the square given the point index.
+                // 4. going to need linear functions to then see if the pixel value (not square) itself is on the line
+                // made by the edges.
+                'float march(vec2 point) {' +
+                    'float size = u_square_size;' +
+                    // Give the square's absolute top left corner...
+                    // 'vec2 tl = mod(point, size);' +
+                    // Gives which square we're on's top left corner, since we'll get an integer from point/size
+                    // which we'll ten advance by the size of the square which is fractional.
+                    'vec2 tl = floor(vec2(point / size)) * size;' +
+                    'vec2 tr = tl + vec2(size, 0.);' +
+                    'vec2 br = tl + size;' +
+                    'vec2 bl = tl + vec2(0., size);' +
+
+                    // Check each corner to find what kind of edge we're dealing with.
+                    'vec2 corners[] = vec2[](bl, br, tr, tl);' +
+                    'int masks[] = int[](0x1, 0x2, 0x4, 0x8);' +
+                    'float total = 0.;' +
+                    'int bitMask = 0;' +
+                    'for (int i = 0; i < corners.length(); i++) {' +
+                        'if (total_at_point(corners[i]) >= 1.) {' +
+                            'bitMask |= masks[i];' +
+                        '}' +
+                    '}' +
+                    // To debug to see each marching square.
+                    // 'return tl;' +
+                    // To debug whether the bitmasking and corner testing is working.
+                    // 'return bitMask == 0 ? vec3(0.) : vec3(0., 0., 1.);' +
+                    'float contourValue = lineFunction(point, tl, bitMask);' +
+                    'return contourValue;' +
+                '}' +
+
+                'float circle_sdf(vec2 point) {' +
+                    'for (int i = 0; i < u_radiuses.length(); i++) {' +
+                        'float d = distance(point, u_centres[i]);' +
+                        'if (abs(u_radiuses[i] - d) < 0.001) {' +
+                            'return 1.;' +
+                        '}' +
+                    '}' +
+                    'return 0.;' +
+                '}' +
+
+                'void main(void) {' +
+                    // Shift position from [-1, 1] to [0, 1]
+                    'vec2 n_position = (v_position + vec2(1.)) * 0.5;' +
+                    // Everything should be normalized in our GLSL shader, so radiuses should be [0, 1]
+                    // and same with positions.
+                    'float total = total_at_point(n_position);' +
+                    'vec3 colour = vec3(0.);' +
+                    // SDF to render the circle if the pixel is close enough.
+                    'if (u_toggle_circles) {' +
+                        'float amount = circle_sdf(n_position);' +
+                        'colour.r = amount;' +
+                    '}' +
+                    'if (!u_toggle_interpolate) {' +
+                        // This is the opposite of the smooth interpolation below, where we use the square's
+                        // centre for the point to determine the colour.
+                        'vec2 centre = (floor(vec2(n_position / u_square_size)) * u_square_size) + u_square_size * 0.5;' +
+                        'total = total_at_point(centre);' +
+                    '}' +
+                    'if ((u_toggle_falloff_debug && total < 1.) || (u_toggle_debug && total >= 1.)) {' +
+                        // This doesn't come from the march value, it comes from the current pixel.
+                        // As a result it will always be smoothly interpolated since it's at the pixel level,
+                        // not the marching square level of granularity.
+                        // If u_toggle_interpolate is off, it will be overriden by a value we get at the
+                        // centre of each square, which will be shared by all pixels in the square.
+                        // This overriding of the 'total' value happens just above.
+                        'colour = vec3(1., 0., 0.) * total;' +
+                    '}' +
+                    // The contour line, it's when total is very close to 1 iirc? Or maybe
+                    // it's when we're on the edge or something like that?
+                    // Use an epislon to determine that...
+                    'if (u_toggle_outline) {' +
+                        'colour += vec3(0., 0., 1.) * march(n_position);' +
+                    '}' +
+                    
+                    'FragColor = vec4(colour, 1.);' +
+                '}';
+
+            this.state[SHADER_NAME] = new Shader(gl, vertCode, fragCode);
+            this.state[SHADER_NAME].cacheUniformLocations(gl, uniforms);
+            this.state[SHADER_NAME].cacheAttributeLocations(gl, attributes, false);
+
+            // We reuse the same shader over and over, so we an make this the program we use right here.
+            // If we need to switch shaders between draw calls, we'll then have to move this to draw()
+            const { [SHADER_NAME]: shader } = this.state;
+            const { program } = shader;           
+
+            gl.useProgram(program);
+        }
+
+        setupBuffer() {
+            const { ctx: gl } = this;
+            this.state.buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.state.buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, this.state.rawBuffer, gl.STATIC_DRAW);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        }
+
+        setupControls() {
+            const setMarchingSquaresSize = document.getElementById('set-marching-squares-size');
+            setMarchingSquaresSize.value = this.squareSize;
+            const handler = (event) => {
+                // Squares will be regenerated in the GLSL shader each time.
+                this.squareSize = parseFloat((event.target.value));
+            };
+            setMarchingSquaresSize.onchange = handler;
+            setMarchingSquaresSize.oninput = handler;
+
+            const toggleInterpolate = document.getElementById('toggle-interpolate');
+            toggleInterpolate.onclick = () => {
+                this.toggleInterpolate = !this.toggleInterpolate;
+            }
+
+            const toggleOutline = document.getElementById('toggle-outline');
+            toggleOutline.onclick = () => {
+                this.toggleOutline = !this.toggleOutline;
+            }
+
+            const toggleCircles = document.getElementById('toggle-circles');
+            toggleCircles.onclick = () => {
+                this.toggleCircles = !this.toggleCircles;
+            }
+
+            const toggleMarchingSquaresDebug = document.getElementById('toggle-marching-squares-debug');
+            toggleMarchingSquaresDebug.onclick = () => {
+                this.toggleMarchingSquaresDebug = !this.toggleMarchingSquaresDebug;
+            }
+
+            const toggleMarchingSquaresFalloffDebug = document.getElementById('toggle-marching-squares-falloff-debug');
+            toggleMarchingSquaresFalloffDebug.onclick = () => {
+                this.toggleMarchingSquaresFalloffDebug = !this.toggleMarchingSquaresFalloffDebug;
+            }
+        }
+
+        draw() {
+            const { ctx: gl } = this;
+            const { [SHADER_NAME]: shader, buffer, rawBuffer } = this.state;
+            const { program } = shader;           
+
+            // We reuse the shader, so no need to bind it over and over.
+            gl.clear(gl.COLOR_BUFFER_BIT);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            // Need to enable now because no buffer is bound when we cache their locations.
+            gl.enableVertexAttribArray(shader.positionLocation);
+            gl.vertexAttribPointer(shader.positionLocation, 2, gl.FLOAT, false, 8, 0);
+
+            // Supply metaball centres and radiuses
+            // TODO
+            // Radiuses won't ever change so we could bind + set these once.
+            const radiuses = this.metaballs.data.map(({ r }) => r);
+            // Centres definitely change as the metaballs move, so we do need to update per draw call.
+            const centres = this.metaballs.data.reduce((acc, d) => [...acc, ...d.c], []);
+
+            // TODO
+            // Shold probably only make this once.
+            gl.uniform1fv(shader.u_radiusesLocation, new Float32Array(radiuses));
+            gl.uniform2fv(shader.u_centresLocation, new Float32Array(centres));
+
+            // Add the controls uniforms as well as boolean. (uniform1i?)
+            gl.uniform1f(shader.u_square_sizeLocation, this.squareSize);
+            gl.uniform1i(shader.u_toggle_interpolateLocation, this.toggleInterpolate);
+            gl.uniform1i(shader.u_toggle_outlineLocation, this.toggleOutline);
+            gl.uniform1i(shader.u_toggle_circlesLocation, this.toggleCircles);
+            gl.uniform1i(shader.u_toggle_debugLocation, this.toggleMarchingSquaresDebug);
+            gl.uniform1i(shader.u_toggle_falloff_debugLocation, this.toggleMarchingSquaresFalloffDebug);
+
+            // 12 data values (2 * 6 verts)
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, rawBuffer.length / 2);
+        }
+
+        // drawMarchingSquareEdges() {
+        //         // With interpolation
+        //         this.marchingSquares.edges.forEach((edge, i) => {
+        //             const [p0, p1] = edge;
+        //             const [x0, y0] = p0;
+        //             const [x1, y1] = p1;
+        //             ctx.beginPath();
+        //             ctx.moveTo(x0, y0);
+        //             ctx.lineTo(x1, y1);
+        //             ctx.stroke();
+        //             // Can debug what the index contained as far as 0x0 -> 0xf
+        //             // const [cx, cy] = square.centre;
+        //             // ctx.fillText(value, cx, cy);
+        //         });
+        //     }
+        // }
+
+        update() {
+            this.draw();
+        }
+    }
+
+    const { width, height } = document.getElementById('canvas');
+
+    // Add a random direction for now between [-1, 1].
+    const randomDirection = () => [
+        -1 + 2 * Math.random(),
+        -1 + 2 * Math.random(),
+    ];
+
+    // For motion, try to make sure none of these go past the bounds.
+    // Otherwise the object will get stuck there given the current collision testing.
+    const data = [
+        { r: 0.073, c: [0.5, 0.5], direction: randomDirection() },
+        { r: 0.023, c: [0.1, 0.2], direction: randomDirection() },
+        { r: 0.082, c: [0.85, 0.9], direction: randomDirection() },
+        { r: 0.030, c: [0.4, 0.1], direction: randomDirection() },
+        { r: 0.050, c: [0.6, 0.7], direction: randomDirection() },
+        { r: 0.069, c: [0.1, 0.8], direction: randomDirection() },
+        { r: 0.037, c: [0.2, 0.4], direction: randomDirection() },
+        { r: 0.073, c: [0.9, 0.1], direction: randomDirection() },
+        { r: 0.083, c: [0.3, 0.7], direction: randomDirection() },
+        { r: 0.060, c: [0.4, 0.9], direction: randomDirection() },
+        { r: 0.0120, c: [0.5, 0.7], direction: randomDirection() },
+        // { r: 0.073, c: [0.5, 0.2], direction: randomDirection() },
+        // { r: 0.023, c: [0.4, 0.7], direction: randomDirection() },
+        // { r: 0.070, c: [0.2, 0.1], direction: randomDirection() },
+        // { r: 0.010, c: [0.3, 0.78], direction: randomDirection() },
+    ];
+
+    // Normalized
+    const bounds = {
+        start: [0, 0],
+        end: [1, 1],
+    };
+    const metaballs = new Metaballs({ data, bounds });
+    const viz = new Viz({ metaballs });
+
+    const update = (_timestamp) => {
+        metaballs.update();
+        // After marching we can then update the visualization.
+        viz.update();
+        // Rinse and repeat.
+        window.requestAnimationFrame(update);
+    }
+
+    window.requestAnimationFrame(update);
+
+    </script>
+</html>
